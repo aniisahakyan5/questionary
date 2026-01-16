@@ -74,11 +74,18 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=True) # Optional now
     email = db.Column(db.String(150), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=True)  # Nullable for first-time users
     is_admin = db.Column(db.Boolean, default=False)
     can_view = db.Column(db.Boolean, default=True)
     can_edit = db.Column(db.Boolean, default=False)
     
-    # removed password_hash, must_change_password
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        if not self.password_hash:
+            return False
+        return check_password_hash(self.password_hash, password)
 
 class Department(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -133,14 +140,27 @@ def login():
 
     if request.method == 'POST':
         email = request.form.get('email')
+        password = request.form.get('password')
+        
         if not email:
             flash('Please enter your email.', 'danger')
             return redirect(url_for('login'))
         
-        # Check if user exists OR if DB is empty (first user = admin)
+        # Check if user exists
         user = User.query.filter_by(email=email).first()
         is_first_user = (User.query.count() == 0)
         
+        # If password provided, try password login
+        if password:
+            if user and user.check_password(password):
+                login_user(user)
+                flash('Logged in successfully!', 'success')
+                return redirect(url_for('dashboard'))
+            else:
+                flash('Invalid email or password', 'danger')
+                return redirect(url_for('login'))
+        
+        # No password provided - send magic link
         if not user and not is_first_user:
             flash('Access denied. Your email is not authorized.', 'danger')
             return redirect(url_for('login'))
@@ -192,8 +212,6 @@ Questionary Team'''
             print(f"------------------------", flush=True)
         
         flash('Check your email for the login link!', 'info')
-        # In a real app, we wouldn't redirect to dashboard immediately, but for dev/testing ease if we can't click link? 
-        # No, must click link.
         return render_template('login_sent.html', email=email)
         
     return render_template('login.html')
@@ -209,6 +227,10 @@ def login_callback(token):
     user = User.query.filter_by(email=email).first()
     if user:
         login_user(user)
+        # Check if user needs to set password
+        if not user.password_hash:
+            flash('Please create a password for your account.', 'info')
+            return redirect(url_for('set_password'))
         flash('Logged in successfully!', 'success')
         return redirect(url_for('dashboard'))
     else:
@@ -220,6 +242,38 @@ def login_callback(token):
 def logout():
     logout_user()
     return redirect(url_for('login'))
+
+@app.route('/set-password', methods=['GET', 'POST'])
+@login_required
+def set_password():
+    # If user already has a password, redirect to dashboard
+    if current_user.password_hash:
+        return redirect(url_for('dashboard'))
+    
+    if request.method == 'POST':
+        password = request.form.get('password')
+        confirm_password = request.form.get('confirm_password')
+        
+        if not password or not confirm_password:
+            flash('Please fill in all fields.', 'danger')
+            return redirect(url_for('set_password'))
+        
+        if password != confirm_password:
+            flash('Passwords do not match.', 'danger')
+            return redirect(url_for('set_password'))
+        
+        if len(password) < 6:
+            flash('Password must be at least 6 characters long.', 'danger')
+            return redirect(url_for('set_password'))
+        
+        # Set password
+        current_user.set_password(password)
+        db.session.commit()
+        
+        flash('Password created successfully!', 'success')
+        return redirect(url_for('dashboard'))
+    
+    return render_template('set_password.html')
 
 @app.route('/register/<token>', methods=['GET', 'POST'])
 def register_token(token):
