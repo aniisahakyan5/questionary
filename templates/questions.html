@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Questions Board</h2>
+    <button class="btn btn-custom" data-bs-toggle="modal" data-bs-target="#addQuestionModal">
+        + New Question
+    </button>
+</div>
+
+<!-- Add Question Modal -->
+<div class="modal fade" id="addQuestionModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Log New Question</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form action="{{ url_for('questions') }}" method="POST">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Employee</label>
+                        <select class="form-select" name="employee_id" required>
+                            <option value="">Who Asked?</option>
+                            {% for emp in employees %}
+                            <option value="{{ emp.id }}">{{ emp.full_name }} ({{ emp.department.name }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Question</label>
+                        <textarea class="form-control" name="question_text" rows="3" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Link to Existing Question (Mark as Duplicate)</label>
+                        <select class="form-select" name="parent_id">
+                            <option value="">-- None (New Topic) --</option>
+                            {% for q_opt in questions %}
+                            {% if not q_opt.parent_id %}
+                            <option value="{{ q_opt.id }}">{{ q_opt.question_text[:50] }}... ({{
+                                q_opt.employee.full_name }})</option>
+                            {% endif %}
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">If this is a repeat, select the original question.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-custom">Save Question</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Questions List -->
+{% for q in questions %}
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center bg-white">
+        <div>
+            <span
+                class="badge bg-{{ 'success' if q.status == 'Answered' else 'warning' if q.status == 'Follow-up' else 'danger' }} me-2">
+                {{ q.status }}
+            </span>
+            <strong>{{ q.employee.full_name }}</strong> <span class="text-muted">from {{ q.employee.department.name
+                }}</span>
+        </div>
+        <small class="text-muted">{{ q.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
+    </div>
+    <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+            <p class="card-text fw-bold mb-0 me-2">{{ q.question_text }}</p>
+
+            {% if q.parent_id %}
+            <span class="badge bg-secondary" data-bs-toggle="tooltip" data-bs-placement="top"
+                title="Duplicate of: {{ q.parent.question_text }}">Duplicate</span>
+            {% elif q.repetition_count > 1 %}
+            <span class="badge" style="background-color: #00BED5;">Asked {{ q.repetition_count }} times</span>
+            {% endif %}
+        </div>
+
+        <form action="{{ url_for('update_question', id=q.id) }}" method="POST" class="mt-3 p-3 bg-light rounded">
+            <div class="mb-2">
+                <label class="form-label text-muted small">Your Answer / Notes</label>
+                <textarea class="form-control" name="answer_text" rows="2">{{ q.answer_text or '' }}</textarea>
+            </div>
+            <div class="d-flex justify-content-between align-items-center">
+                <select class="form-select w-auto form-select-sm" name="status">
+                    <option value="Pending" {% if q.status=='Pending' %}selected{% endif %}>Pending</option>
+                    <option value="Answered" {% if q.status=='Answered' %}selected{% endif %}>Answered</option>
+                    <option value="Follow-up" {% if q.status=='Follow-up' %}selected{% endif %}>Follow-up</option>
+                </select>
+                <button type="submit" class="btn btn-sm btn-custom">Update</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">No questions found. Add one to get started!</div>
+{% endfor %}
+
+{% endblock %}

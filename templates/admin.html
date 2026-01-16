@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2 class="mb-4">User Management (Admin)</h2>
+
+<div class="row">
+    <!-- User List -->
+    <div class="col-md-8">
+        <div class="card mb-4">
+            <div class="card-header">Users & Permissions</div>
+            <div class="card-body">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th class="text-center">Admin</th>
+                            <th class="text-center">View</th>
+                            <th class="text-center">Edit</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr>
+                            <td>{{ user.email }}</td>
+                            <td class="text-center">{% if user.is_admin %}<span class="badge bg-success">Yes</span>{%
+                                else %}<span class="badge bg-secondary">No</span>{% endif %}</td>
+                            <td class="text-center">{% if user.can_view %}<span class="badge bg-success">Yes</span>{%
+                                else %}<span class="badge bg-danger">No</span>{% endif %}</td>
+                            <td class="text-center">{% if user.can_edit %}<span class="badge bg-success">Yes</span>{%
+                                else %}<span class="badge bg-danger">No</span>{% endif %}</td>
+                            <td>
+                                {% if not user.email == current_user.email %}
+                                <a href="{{ url_for('delete_user', id=user.id) }}" class="btn btn-sm btn-danger"
+                                    onclick="return confirm('Are you sure?')">Delete</a>
+                                {% else %}
+                                <span class="text-muted">Current User</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Invite User Form -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header bg-success text-white">Add Authorized User</div>
+            <div class="card-body">
+                <p class="small text-muted">A magic link will be sent when they log in.</p>
+                <form method="POST">
+                    {{ invite_form.hidden_tag() }}
+                    <div class="mb-3">
+                        <label class="form-label">Email Address</label>
+                        {{ invite_form.email(class="form-control", placeholder="user@example.com") }}
+                        {% for error in invite_form.email.errors %}
+                        <div class="text-danger small">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                    <hr>
+                    <div class="mb-2 form-check">
+                        {{ invite_form.can_view(class="form-check-input") }}
+                        <label class="form-check-label" for="can_view">Can View Dashboard</label>
+                    </div>
+                    <div class="mb-2 form-check">
+                        {{ invite_form.can_edit(class="form-check-input") }}
+                        <label class="form-check-label" for="can_edit">Can Edit</label>
+                    </div>
+                    <div class="mb-3 form-check">
+                        {{ invite_form.is_admin(class="form-check-input") }}
+                        <label class="form-check-label" for="is_admin">Is Admin</label>
+                    </div>
+                    {{ invite_form.submit(class="btn btn-success w-100") }}
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

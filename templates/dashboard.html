@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2 class="mb-4">Dashboard</h2>
+<div class="row">
+    <div class="col-md-4">
+        <div class="card text-white bg-primary mb-3 h-100">
+            <div class="card-header">Total Questions</div>
+            <div class="card-body d-flex align-items-center justify-content-center">
+                <h5 class="card-title display-4">{{ total_questions }}</h5>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-white bg-warning mb-3 h-100">
+            <div class="card-header">Pending</div>
+            <div class="card-body d-flex align-items-center justify-content-center">
+                <h5 class="card-title display-4">{{ pending_questions }}</h5>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-white bg-info mb-3 h-100" style="background-color: #00BED5 !important;">
+            <div class="card-header">Top given questions</div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush text-dark">
+                    {% for q in recurring_questions %}
+                    <li
+                        class="list-group-item d-flex justify-content-between align-items-center bg-transparent border-0 py-2 px-0">
+                        <small class="text-truncate" style="max-width: 150px;" title="{{ q.question_text }}">{{
+                            q.question_text }}</small>
+                        {% set askers = [] %}
+                        {% set _ = askers.append(q.employee.full_name) %}
+                        {% for child in q.children %}
+                        {% set _ = askers.append(child.employee.full_name) %}
+                        {% endfor %}
+                        <span class="badge bg-white text-primary rounded-pill fs-6" data-bs-toggle="tooltip"
+                            data-bs-placement="left" title="Asked by: {{ askers|join(', ') }}">{{ q.repetition_count
+                            }}</span>
+                    </li>
+                    {% else %}
+                    <li class="list-group-item bg-transparent border-0 py-1 px-0"><small>No recurring issues.</small>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h3 class="mb-3">Questions (Grouped by Department)</h3>
+<div class="card p-3">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>Status</th>
+                    <th>Question</th>
+                    <th>Answer</th>
+                    <th>Employee</th>
+                    <th>Date</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for q in recent_questions %}
+                <tr>
+                    <td>
+                        <span
+                            class="badge rounded-pill bg-{{ 'success' if q.status == 'Answered' else 'warning' if q.status == 'Follow-up' else 'danger' }}">
+                            {{ q.status }}
+                        </span>
+                    </td>
+                    <td>{{ q.question_text }}</td>
+                    <td>{{ q.answer_text if q.answer_text else '-' }}</td>
+                    <td><span class="badge bg-secondary">{{ q.employee.department.name }}</span> {{ q.employee.full_name
+                        }}</td>
+                    <td>{{ q.created_at.strftime('%Y-%m-%d') }}</td>
+                    <td>
+                        <a href="{{ url_for('questions') }}" class="btn btn-sm btn-outline-primary">View</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center text-muted">No questions found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

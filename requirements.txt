@@ -1,0 +1,10 @@
+Flask==3.0.0
+Flask-SQLAlchemy==3.1.1
+Flask-WTF==1.2.1
+email_validator
+python-dotenv
+psycopg2-binary
+Flask-Login
+authlib
+requests
+Flask-Mail
