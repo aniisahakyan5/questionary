@@ -76,9 +76,17 @@
             {% elif q.repetition_count > 1 %}
             <span class="badge" style="background-color: #00BED5;">Asked {{ q.repetition_count }} times</span>
             {% endif %}
+
+            {% if current_user.is_admin %}
+            <button class="btn btn-sm btn-outline-secondary ms-2" data-bs-toggle="modal"
+                data-bs-target="#editQuestionModal{{ q.id }}">
+                Edit Question
+            </button>
+            {% endif %}
         </div>
 
         <form action="{{ url_for('update_question', id=q.id) }}" method="POST" class="mt-3 p-3 bg-light rounded">
+
             <div class="mb-2">
                 <label class="form-label text-muted small">Your Answer / Notes</label>
                 <textarea class="form-control" name="answer_text" rows="2">{{ q.answer_text or '' }}</textarea>
@@ -94,6 +102,37 @@
         </form>
     </div>
 </div>
+
+<!-- Edit Question Modal (Admin Only) -->
+{% if current_user.is_admin %}
+<div class="modal fade" id="editQuestionModal{{ q.id }}" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Question</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form action="{{ url_for('edit_question', id=q.id) }}" method="POST">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Question Text</label>
+                        <textarea class="form-control" name="question_text" rows="3"
+                            required>{{ q.question_text }}</textarea>
+                    </div>
+                    <div class="alert alert-warning mb-0">
+                        <small><strong>Note:</strong> This will update the question text. Only admins can perform this
+                            action.</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-custom">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
 {% else %}
 <div class="alert alert-info">No questions found. Add one to get started!</div>
 {% endfor %}

@@ -451,6 +451,26 @@ def update_question(id):
     flash('Question updated!', 'success')
     return redirect(url_for('questions'))
 
+@app.route('/questions/<int:id>/edit', methods=['POST'])
+@login_required
+def edit_question(id):
+    if not current_user.is_admin:
+        flash('Access Denied: Only admins can edit questions.', 'danger')
+        return redirect(url_for('questions'))
+    
+    q = Question.query.get_or_404(id)
+    new_question_text = request.form.get('question_text')
+    
+    if not new_question_text or not new_question_text.strip():
+        flash('Question text cannot be empty.', 'danger')
+        return redirect(url_for('questions'))
+    
+    q.question_text = new_question_text
+    db.session.commit()
+    flash('Question text updated successfully!', 'success')
+    return redirect(url_for('questions'))
+
+
 @app.route('/departments', methods=['GET', 'POST'])
 def departments():
     if request.method == 'POST':
