@@ -11,6 +11,7 @@ from wtforms import StringField, PasswordField, BooleanField, SubmitField, Email
 from wtforms.validators import DataRequired, Email, EqualTo
 from itsdangerous import URLSafeTimedSerializer
 from flask_mail import Mail, Message
+from impact_analysis import calculate_impact_score, generate_radar_chart
 
 # --- Application Setup ---
 load_dotenv() # Load environment variables from .env
@@ -126,6 +127,26 @@ class Question(db.Model):
             # User wants "Asked X times" on the main question.
             return 0 
         return 1 + len(self.children)
+
+class BreachIncident(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    company_name = db.Column(db.String(150), nullable=False)
+    incident_date = db.Column(db.DateTime, nullable=False)
+    description = db.Column(db.Text)
+    financial_impact = db.Column(db.Float)  # Pillar 1
+    downtime_days = db.Column(db.Integer)    # Pillar 3
+    strategic_severity = db.Column(db.Integer) # Pillar 4 (0-5)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    sentiments = db.relationship('SentimentResponse', backref='incident', lazy=True)
+
+class SentimentResponse(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    incident_id = db.Column(db.Integer, db.ForeignKey('breach_incident.id'), nullable=False)
+    stakeholder_type = db.Column(db.String(100)) # e.g., 'Customer', 'Employee', 'Shareholder'
+    trust_score = db.Column(db.Integer) # 1-10
+    sentiment_text = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 # --- Routes ---
 
@@ -394,11 +415,82 @@ def dashboard():
     recurring_questions = [q for q in Question.query.all() if q.repetition_count > 1]
     recurring_questions.sort(key=lambda x: x.repetition_count, reverse=True)
     
+    # Get employees for the Add Question modal
+    employees = Employee.query.filter_by(is_active=True).all()
+    
     return render_template('dashboard.html', 
                            total_questions=total_questions,
                            pending_questions=pending_questions,
                            recent_questions=all_questions,
-                           recurring_questions=recurring_questions[:5])
+                           recurring_questions=recurring_questions[:5],
+                           employees=employees)
+
+@app.route('/questions/<int:id>/view')
+@login_required
+def view_question(id):
+    """View a single question with its details."""
+    if not current_user.can_view:
+        flash('Access Denied', 'danger')
+        return redirect(url_for('index'))
+    
+    question = Question.query.get_or_404(id)
+    employees = Employee.query.filter_by(is_active=True).all()
+    all_questions = Question.query.order_by(Question.created_at.desc()).all()
+    
+    return render_template('questions.html', 
+                           questions=[question], 
+                           employees=employees,
+                           single_view=True)
+
+@app.route('/cyber-impact')
+@login_required
+def cyber_impact():
+    incidents = BreachIncident.query.order_by(BreachIncident.incident_date.desc()).all()
+    
+    # Process incidents to include their scorecard data
+    processed_incidents = []
+    for inc in incidents:
+        score, pillar_scores = calculate_impact_score(inc)
+        chart_data = generate_radar_chart(pillar_scores)
+        processed_incidents.append({
+            'incident': inc,
+            'score': score,
+            'chart': chart_data
+        })
+        
+    return render_template('scorecard.html', incidents=processed_incidents)
+
+@app.route('/cyber-impact/add', methods=['POST'])
+@login_required
+def add_incident():
+    if not current_user.is_admin:
+        flash('Access Denied', 'danger')
+        return redirect(url_for('cyber_impact'))
+        
+    company_name = request.form.get('company_name')
+    incident_date_str = request.form.get('incident_date')
+    description = request.form.get('description')
+    financial_impact = request.form.get('financial_impact', 0)
+    downtime_days = request.form.get('downtime_days', 0)
+    strategic_severity = request.form.get('strategic_severity', 0)
+    
+    try:
+        incident_date = datetime.strptime(incident_date_str, '%Y-%m-%d')
+        new_inc = BreachIncident(
+            company_name=company_name,
+            incident_date=incident_date,
+            description=description,
+            financial_impact=float(financial_impact),
+            downtime_days=int(downtime_days),
+            strategic_severity=int(strategic_severity)
+        )
+        db.session.add(new_inc)
+        db.session.commit()
+        flash('Breach incident added successfully!', 'success')
+    except Exception as e:
+        flash(f'Error adding incident: {e}', 'danger')
+        
+    return redirect(url_for('cyber_impact'))
 
 @app.route('/questions', methods=['GET', 'POST'])
 @login_required
@@ -437,10 +529,17 @@ def update_question(id):
     q = Question.query.get_or_404(id)
     answer_text = request.form.get('answer_text')
     status = request.form.get('status')
+    question_text_edit = request.form.get('question_text_edit')
     
     if status == 'Answered' and (not answer_text or not answer_text.strip()):
         flash('Cannot mark as Answered without providing an answer.', 'danger')
-        return redirect(url_for('questions'))
+        # Try to redirect back to referrer, otherwise go to questions page
+        return redirect(request.referrer or url_for('questions'))
+    
+    # Handle admin question text edit
+    if question_text_edit and current_user.is_admin:
+        if question_text_edit.strip():
+            q.question_text = question_text_edit.strip()
 
     q.answer_text = answer_text
     q.status = status
@@ -449,7 +548,8 @@ def update_question(id):
     
     db.session.commit()
     flash('Question updated!', 'success')
-    return redirect(url_for('questions'))
+    # Redirect back to where the user came from
+    return redirect(request.referrer or url_for('questions'))
 
 @app.route('/questions/<int:id>/edit', methods=['POST'])
 @login_required

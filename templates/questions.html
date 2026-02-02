@@ -1,7 +1,12 @@
 {% extends 'base.html' %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2>Questions Board</h2>
+    <div>
+        {% if single_view %}
+        <a href="{{ url_for('questions') }}" class="btn btn-outline-secondary me-2">&larr; Back to All Questions</a>
+        {% endif %}
+        <h2 class="d-inline-block mb-0">Questions Board</h2>
+    </div>
     <button class="btn btn-custom" data-bs-toggle="modal" data-bs-target="#addQuestionModal">
         + New Question
     </button>
@@ -19,10 +24,14 @@
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">Employee</label>
-                        <select class="form-select" name="employee_id" required>
+                        <input type="text" class="form-control mb-2" id="questionsEmployeeSearch"
+                            placeholder="Type to search employee..." autocomplete="off">
+                        <select class="form-select" name="employee_id" id="questionsEmployeeSelect" required>
                             <option value="">Who Asked?</option>
                             {% for emp in employees %}
-                            <option value="{{ emp.id }}">{{ emp.full_name }} ({{ emp.department.name }})</option>
+                            <option value="{{ emp.id }}" data-name="{{ emp.full_name|lower }}"
+                                data-dept="{{ emp.department.name|lower }}">{{ emp.full_name }} ({{ emp.department.name
+                                }})</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -137,4 +146,46 @@
 <div class="alert alert-info">No questions found. Add one to get started!</div>
 {% endfor %}
 
+<!-- Employee Search Script -->
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const searchInput = document.getElementById('questionsEmployeeSearch');
+        const employeeSelect = document.getElementById('questionsEmployeeSelect');
+
+        if (searchInput && employeeSelect) {
+            // Store original options
+            const originalOptions = [];
+            for (let i = 0; i < employeeSelect.options.length; i++) {
+                const opt = employeeSelect.options[i];
+                originalOptions.push({
+                    value: opt.value,
+                    text: opt.text,
+                    textLower: opt.text.toLowerCase()
+                });
+            }
+
+            searchInput.addEventListener('input', function () {
+                const searchTerm = this.value.toLowerCase().trim();
+
+                // Clear current options
+                employeeSelect.innerHTML = '';
+
+                // Add matching options back
+                originalOptions.forEach(function (opt) {
+                    if (opt.value === '' || searchTerm === '' || opt.textLower.includes(searchTerm)) {
+                        const newOption = document.createElement('option');
+                        newOption.value = opt.value;
+                        newOption.text = opt.text;
+                        employeeSelect.add(newOption);
+                    }
+                });
+
+                // If only one match (plus placeholder), auto-select it
+                if (employeeSelect.options.length === 2 && searchTerm !== '') {
+                    employeeSelect.selectedIndex = 1;
+                }
+            });
+        }
+    });
+</script>
 {% endblock %}
