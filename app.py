@@ -11,7 +11,6 @@ from wtforms import StringField, PasswordField, BooleanField, SubmitField, Email
 from wtforms.validators import DataRequired, Email, EqualTo
 from itsdangerous import URLSafeTimedSerializer
 from flask_mail import Mail, Message
-from impact_analysis import calculate_impact_score, generate_radar_chart
 
 # --- Application Setup ---
 load_dotenv() # Load environment variables from .env
