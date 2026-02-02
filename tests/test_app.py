@@ -22,7 +22,7 @@ class BasicTests(unittest.TestCase):
 
     def test_login_page_loads(self):
         response = self.app.get('/login', follow_redirects=True)
-        self.assertEqual(response.status_code, 404) # This will FAIL! 💥
+        self.assertEqual(response.status_code, 200)
         self.assertIn(b'Login', response.data)
 
     def test_user_password_hashing(self):
