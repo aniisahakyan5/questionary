@@ -407,8 +407,13 @@ def dashboard():
     total_questions = Question.query.count()
     pending_questions = Question.query.filter_by(status='Pending').count()
     
+    # Pagination parameters
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 5, type=int)
+    
     # Sort by Department Name, then by Date
-    all_questions = db.session.query(Question).join(Employee).join(Department).order_by(Department.name, Question.created_at.desc()).all()
+    questions_pagination = db.session.query(Question).join(Employee).join(Department).order_by(Department.name, Question.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    all_questions = questions_pagination.items
     
     # Get top recurring questions (parents with children)
     recurring_questions = [q for q in Question.query.all() if q.repetition_count > 1]
@@ -422,7 +427,9 @@ def dashboard():
                            pending_questions=pending_questions,
                            recent_questions=all_questions,
                            recurring_questions=recurring_questions[:5],
-                           employees=employees)
+                           employees=employees,
+                           pagination=questions_pagination,
+                           per_page=per_page)
 
 @app.route('/questions/<int:id>/view')
 @login_required
