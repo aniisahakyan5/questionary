@@ -16,8 +16,13 @@
                     <div class="mb-3">
                         <label for="password" class="form-label">Password <span
                                 class="text-muted small">(optional)</span></label>
-                        <input type="password" class="form-control" id="password" name="password"
-                            placeholder="Leave blank to receive a magic link">
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="password" name="password"
+                                placeholder="Leave blank to receive a magic link">
+                            <button class="btn btn-outline-secondary" type="button" id="togglePassword">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
                         <div class="form-text">
                             <a href="#" onclick="document.getElementById('password').value=''; return false;">Forgot
                                 password? Click here for magic link</a>
@@ -31,4 +36,22 @@
         </div>
     </div>
 </div>
+<script>
+    const togglePassword = document.querySelector('#togglePassword');
+    const password = document.querySelector('#password');
+
+    togglePassword.addEventListener('click', function (e) {
+        const type = password.getAttribute('type') === 'password' ? 'text' : 'password';
+        password.setAttribute('type', type);
+
+        const icon = this.querySelector('i');
+        if (type === 'text') {
+            icon.classList.remove('bi-eye');
+            icon.classList.add('bi-eye-slash');
+        } else {
+            icon.classList.remove('bi-eye-slash');
+            icon.classList.add('bi-eye');
+        }
+    });
+</script>
 {% endblock %}
