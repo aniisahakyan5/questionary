@@ -410,9 +410,15 @@ def dashboard():
     # Pagination parameters
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 5, type=int)
+    status_filter = request.args.get('status')
     
     # Sort by Department Name, then by Date
-    questions_pagination = db.session.query(Question).join(Employee).join(Department).order_by(Department.name, Question.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    query = db.session.query(Question).join(Employee).join(Department)
+    
+    if status_filter:
+        query = query.filter(Question.status == status_filter)
+        
+    questions_pagination = query.order_by(Department.name, Question.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
     all_questions = questions_pagination.items
     
     # Get top recurring questions (parents with children)
@@ -429,7 +435,8 @@ def dashboard():
                            recurring_questions=recurring_questions[:5],
                            employees=employees,
                            pagination=questions_pagination,
-                           per_page=per_page)
+                           per_page=per_page,
+                           current_status=status_filter)
 
 @app.route('/questions/<int:id>/view')
 @login_required
@@ -575,6 +582,19 @@ def edit_question(id):
     db.session.commit()
     flash('Question text updated successfully!', 'success')
     return redirect(url_for('questions'))
+
+@app.route('/questions/<int:id>/delete', methods=['POST'])
+@login_required
+def delete_question(id):
+    if not current_user.is_admin:
+        flash('Access Denied: Only admins can delete questions.', 'danger')
+        return redirect(url_for('dashboard'))
+        
+    q = Question.query.get_or_404(id)
+    db.session.delete(q)
+    db.session.commit()
+    flash('Question deleted successfully.', 'success')
+    return redirect(request.referrer or url_for('dashboard'))
 
 
 @app.route('/departments', methods=['GET', 'POST'])

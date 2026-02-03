@@ -66,12 +66,14 @@
         </div>
     </div>
     <div class="col-md-4">
-        <div class="card text-white bg-warning mb-3 h-100">
-            <div class="card-header">Pending</div>
-            <div class="card-body d-flex align-items-center justify-content-center">
-                <h5 class="card-title display-4">{{ pending_questions }}</h5>
+        <a href="{{ url_for('dashboard', status='Pending') }}" class="text-decoration-none">
+            <div class="card text-white bg-warning mb-3 h-100 table-hover-card">
+                <div class="card-header">Pending</div>
+                <div class="card-body d-flex align-items-center justify-content-center">
+                    <h5 class="card-title display-4">{{ pending_questions }}</h5>
+                </div>
             </div>
-        </div>
+        </a>
     </div>
     <div class="col-md-4">
         <div class="card text-white bg-info mb-3 h-100" style="background-color: #00BED5 !important;">
@@ -146,6 +148,12 @@
                                 class="btn btn-sm btn-outline-primary">View</a>
                             <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal"
                                 data-bs-target="#editQuestionModal{{ q.id }}">Edit</button>
+                            {% if current_user.is_admin %}
+                            <form action="{{ url_for('delete_question', id=q.id) }}" method="POST" class="d-inline"
+                                onsubmit="return confirm('Are you sure you want to delete this question?');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                            </form>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>
@@ -219,7 +227,7 @@
             {# Previous Button #}
             <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
                 <a class="page-link"
-                    href="{{ url_for('dashboard', page=pagination.prev_num, per_page=per_page) if pagination.has_prev else '#' }}">
+                    href="{{ url_for('dashboard', page=pagination.prev_num, per_page=per_page, status=current_status) if pagination.has_prev else '#' }}">
                     Previous
                 </a>
             </li>
@@ -228,7 +236,8 @@
             {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
             {% if page_num %}
             <li class="page-item {% if page_num == pagination.page %}active{% endif %}">
-                <a class="page-link" href="{{ url_for('dashboard', page=page_num, per_page=per_page) }}">
+                <a class="page-link"
+                    href="{{ url_for('dashboard', page=page_num, per_page=per_page, status=current_status) }}">
                     {{ page_num }}
                 </a>
             </li>
@@ -240,7 +249,7 @@
             {# Next Button #}
             <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
                 <a class="page-link"
-                    href="{{ url_for('dashboard', page=pagination.next_num, per_page=per_page) if pagination.has_next else '#' }}">
+                    href="{{ url_for('dashboard', page=pagination.next_num, per_page=per_page, status=current_status) if pagination.has_next else '#' }}">
                     Next
                 </a>
             </li>
