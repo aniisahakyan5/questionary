@@ -1,7 +1,8 @@
 import os
+import uuid
 from datetime import datetime
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -62,6 +63,18 @@ app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
 app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME', 'noreply@questionary.app')
 
+# Upload Configuration
+app.config['UPLOAD_FOLDER'] = os.path.join(app.root_path, 'static', 'uploads')
+app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB limit
+
+if not os.path.exists(app.config['UPLOAD_FOLDER']):
+    os.makedirs(app.config['UPLOAD_FOLDER'])
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+
 # Initialize Serializer and Mail
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 mail = Mail(app)
@@ -100,15 +113,19 @@ class Employee(db.Model):
     department_id = db.Column(db.Integer, db.ForeignKey('department.id'), nullable=False)
     position = db.Column(db.String(100))
     is_active = db.Column(db.Boolean, default=True)
+    is_deleted = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     questions = db.relationship('Question', backref='employee', lazy=True)
+    tasks = db.relationship('Task', backref='employee', lazy=True)
 
 class Question(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=False)
-    question_text = db.Column(db.Text, nullable=False)
+    question_text = db.Column(db.Text, nullable=True)
     answer_text = db.Column(db.Text)
+    question_image = db.Column(db.String(255))
+    answer_image = db.Column(db.String(255))
     # Status: 'Pending', 'Answered', 'Follow-up'
     status = db.Column(db.String(50), default='Pending')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -116,16 +133,43 @@ class Question(db.Model):
     # tag column is ignored/deprecated
     parent_id = db.Column(db.Integer, db.ForeignKey('question.id'), nullable=True)
     
-    children = db.relationship('Question', backref=db.backref('parent', remote_side=[id]), lazy=True)
+    children = db.relationship('Question', backref=db.backref('parent', remote_side=[id]), cascade="all, delete-orphan", lazy=True)
 
     @property
     def repetition_count(self):
-        # Count this question (1) + all its children
+        # Count this question (1) + all its children EXCLUDING deleted employees
         if self.parent_id:
-            # If I am a child, look at my parent's count? Or just say I'm a duplicate?
-            # User wants "Asked X times" on the main question.
             return 0 
-        return 1 + len(self.children)
+        
+        # Check if the main question's employee is deleted
+        base_count = 1 if not self.employee.is_deleted else 0
+        
+        # Count children whose employees are not deleted
+        child_count = sum(1 for child in self.children if not child.employee.is_deleted)
+        
+        return base_count + child_count
+
+class Task(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey('employee.id'), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    link = db.Column(db.String(255))
+    # Status: 'Pending', 'In Progress', 'Completed' - though user said they don't need statuses, 
+    # but some internal status might be useful for 'data' tracking.
+    # User said: "i dont need statuses, as it is only data"
+    # Actually, I'll just keep it simple as requested.
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    parent_id = db.Column(db.Integer, db.ForeignKey('task.id'), nullable=True)
+    
+    children = db.relationship('Task', backref=db.backref('parent', remote_side=[id]), cascade="all, delete-orphan", lazy=True)
+
+    @property
+    def repetition_count(self):
+        if self.parent_id:
+            return 0
+        base_count = 1 if not self.employee.is_deleted else 0
+        child_count = sum(1 for child in self.children if not child.employee.is_deleted)
+        return base_count + child_count
 
 class BreachIncident(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -425,8 +469,8 @@ def dashboard():
     recurring_questions = [q for q in Question.query.all() if q.repetition_count > 1]
     recurring_questions.sort(key=lambda x: x.repetition_count, reverse=True)
     
-    # Get employees for the Add Question modal
-    employees = Employee.query.filter_by(is_active=True).all()
+    # Get employees for the Add Question modal (only non-deleted)
+    employees = Employee.query.filter_by(is_deleted=False).all()
     
     return render_template('dashboard.html', 
                            total_questions=total_questions,
@@ -447,7 +491,7 @@ def view_question(id):
         return redirect(url_for('index'))
     
     question = Question.query.get_or_404(id)
-    employees = Employee.query.filter_by(is_active=True).all()
+    employees = Employee.query.filter_by(is_deleted=False).all()
     all_questions = Question.query.order_by(Question.created_at.desc()).all()
     
     return render_template('questions.html', 
@@ -525,8 +569,21 @@ def questions():
         if not parent_id:
             parent_id = None
         
-        if employee_id and question_text:
-            new_q = Question(employee_id=employee_id, question_text=question_text, parent_id=parent_id)
+        question_image_filename = None
+        if 'question_image' in request.files:
+            file = request.files['question_image']
+            if file and allowed_file(file.filename):
+                extension = file.filename.rsplit('.', 1)[1].lower()
+                question_image_filename = f"{uuid.uuid4()}.{extension}"
+                file.save(os.path.join(app.config['UPLOAD_FOLDER'], question_image_filename))
+
+        if employee_id and (question_text or question_image_filename):
+            new_q = Question(
+                employee_id=employee_id, 
+                question_text=question_text, 
+                parent_id=parent_id,
+                question_image=question_image_filename
+            )
             db.session.add(new_q)
             db.session.commit()
             flash('Question added successfully!', 'success')
@@ -534,7 +591,7 @@ def questions():
         return redirect(url_for('questions'))
         
     all_questions = Question.query.order_by(Question.created_at.desc()).all()
-    employees = Employee.query.filter_by(is_active=True).all()
+    employees = Employee.query.filter_by(is_deleted=False).all()
     return render_template('questions.html', questions=all_questions, employees=employees)
 
 @app.route('/questions/<int:id>/update', methods=['POST'])
@@ -553,6 +610,15 @@ def update_question(id):
     if question_text_edit and current_user.is_admin:
         if question_text_edit.strip():
             q.question_text = question_text_edit.strip()
+
+    # Handle answer image upload
+    if 'answer_image' in request.files:
+        file = request.files['answer_image']
+        if file and allowed_file(file.filename):
+            extension = file.filename.rsplit('.', 1)[1].lower()
+            answer_image_filename = f"{uuid.uuid4()}.{extension}"
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], answer_image_filename))
+            q.answer_image = answer_image_filename
 
     q.answer_text = answer_text
     q.status = status
@@ -614,6 +680,37 @@ def departments():
     all_depts = Department.query.all()
     return render_template('departments.html', departments=all_depts)
 
+@app.route('/departments/<int:id>/update', methods=['POST'])
+@login_required
+def update_department(id):
+    if not current_user.is_admin:
+        flash('Access Denied', 'danger')
+        return redirect(url_for('departments'))
+    
+    dept = Department.query.get_or_404(id)
+    name = request.form.get('name')
+    if name:
+        dept.name = name
+        db.session.commit()
+        flash(f'Department updated to {name}.', 'success')
+    return redirect(url_for('departments'))
+
+@app.route('/departments/<int:id>/delete', methods=['POST'])
+@login_required
+def delete_department(id):
+    if not current_user.is_admin:
+        flash('Access Denied', 'danger')
+        return redirect(url_for('departments'))
+    
+    dept = Department.query.get_or_404(id)
+    if dept.employees:
+        flash('Cannot delete department with active employees.', 'danger')
+    else:
+        db.session.delete(dept)
+        db.session.commit()
+        flash('Department deleted.', 'success')
+    return redirect(url_for('departments'))
+
 @app.route('/employees', methods=['GET', 'POST'])
 def employees():
     if request.method == 'POST':
@@ -628,9 +725,89 @@ def employees():
             flash('Employee added!', 'success')
         return redirect(url_for('employees'))
     
-    all_emps = Employee.query.all()
+    all_emps = Employee.query.filter_by(is_deleted=False).all()
     departments = Department.query.all()
     return render_template('employees.html', employees=all_emps, departments=departments)
+
+@app.route('/employees/<int:id>/update', methods=['POST'])
+@login_required
+def update_employee(id):
+    if not current_user.is_admin:
+        flash('Access Denied', 'danger')
+        return redirect(url_for('employees'))
+    
+    emp = Employee.query.get_or_404(id)
+    emp.full_name = request.form.get('full_name')
+    emp.department_id = request.form.get('department_id')
+    emp.position = request.form.get('position')
+    emp.is_active = 'is_active' in request.form
+    
+    db.session.commit()
+    flash('Employee info updated!', 'success')
+    return redirect(url_for('employees'))
+
+@app.route('/employees/<int:id>/delete', methods=['POST'])
+@login_required
+def delete_employee(id):
+    if not current_user.is_admin:
+        flash('Access Denied', 'danger')
+        return redirect(url_for('employees'))
+    
+    emp = Employee.query.get_or_404(id)
+    # User wanted: "if i delete the employee, dont dlete the questions that gave only that employee"
+    # So we soft-delete
+    emp.is_deleted = True
+    db.session.commit()
+    flash(f'Employee {emp.full_name} has been deactivated/deleted.', 'success')
+    return redirect(url_for('employees'))
+
+# --- Task Routes ---
+
+@app.route('/tasks', methods=['GET', 'POST'])
+@login_required
+def tasks():
+    if not current_user.can_view:
+        flash('Access Denied', 'danger')
+        return redirect(url_for('index'))
+
+    if request.method == 'POST':
+        if not current_user.can_edit:
+            flash('Access Denied', 'danger')
+            return redirect(url_for('tasks'))
+
+        employee_id = request.form.get('employee_id')
+        description = request.form.get('description')
+        link = request.form.get('link')
+        parent_id = request.form.get('parent_id') or None
+        
+        if employee_id and description:
+            new_task = Task(
+                employee_id=employee_id,
+                description=description,
+                link=link,
+                parent_id=parent_id
+            )
+            db.session.add(new_task)
+            db.session.commit()
+            flash('Task added successfully!', 'success')
+        return redirect(url_for('tasks'))
+
+    all_tasks = Task.query.order_by(Task.created_at.desc()).all()
+    employees = Employee.query.filter_by(is_deleted=False).all()
+    return render_template('tasks.html', tasks=all_tasks, employees=employees)
+
+@app.route('/tasks/<int:id>/delete', methods=['POST'])
+@login_required
+def delete_task(id):
+    if not current_user.is_admin:
+        flash('Access Denied', 'danger')
+        return redirect(url_for('tasks'))
+    
+    task = Task.query.get_or_404(id)
+    db.session.delete(task)
+    db.session.commit()
+    flash('Task deleted.', 'success')
+    return redirect(url_for('tasks'))
 
 @app.cli.command("init-db")
 def init_db():
