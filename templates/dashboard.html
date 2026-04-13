@@ -15,12 +15,10 @@
                 <h5 class="modal-title">Log New Question</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form action="{{ url_for('questions') }}" method="POST">
+            <form action="{{ url_for('questions') }}" method="POST" enctype="multipart/form-data">
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">Employee</label>
-                        <input type="text" class="form-control mb-2" id="dashboardEmployeeSearch"
-                            placeholder="Type to search employee..." autocomplete="off">
                         <select class="form-select" name="employee_id" id="dashboardEmployeeSelect" required>
                             <option value="">Who Asked?</option>
                             {% for emp in employees %}
@@ -32,7 +30,11 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Question</label>
-                        <textarea class="form-control" name="question_text" rows="3" required></textarea>
+                        <textarea class="form-control" name="question_text" rows="3"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Attach Photo (Optional)</label>
+                        <input type="file" class="form-control" name="question_image" accept="image/*">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Link to Existing Question (Mark as Duplicate)</label>
@@ -86,12 +88,16 @@
                         <small class="text-truncate" style="max-width: 150px;" title="{{ q.question_text }}">{{
                             q.question_text }}</small>
                         {% set askers = [] %}
-                        {% set _ = askers.append(q.employee.full_name) %}
+                        {% if not q.employee.is_deleted %}
+                            {% set _ = askers.append(q.employee.full_name) %}
+                        {% endif %}
                         {% for child in q.children %}
-                        {% set _ = askers.append(child.employee.full_name) %}
+                            {% if not child.employee.is_deleted %}
+                                {% set _ = askers.append(child.employee.full_name) %}
+                            {% endif %}
                         {% endfor %}
                         <span class="badge bg-white text-primary rounded-pill fs-6" data-bs-toggle="tooltip"
-                            data-bs-placement="left" title="Asked by: {{ askers|join(', ') }}">{{ q.repetition_count
+                            data-bs-placement="left" title="Asked by: {{ askers|join(', ') if askers else 'No active employees' }}">{{ q.repetition_count
                             }}</span>
                     </li>
                     {% else %}
@@ -137,10 +143,32 @@
                             {{ q.status }}
                         </span>
                     </td>
-                    <td>{{ q.question_text }}</td>
-                    <td>{{ q.answer_text if q.answer_text else '-' }}</td>
-                    <td><span class="badge bg-secondary">{{ q.employee.department.name }}</span> {{ q.employee.full_name
-                        }}</td>
+                    <td>
+                        {% if q.question_image %}
+                        <div class="mb-1">
+                            <a href="{{ url_for('static', filename='uploads/' + q.question_image) }}" target="_blank">
+                                <img src="{{ url_for('static', filename='uploads/' + q.question_image) }}" class="img-thumbnail" style="max-height: 50px;">
+                            </a>
+                        </div>
+                        {% endif %}
+                        {{ q.question_text if q.question_text else '' }}
+                    </td>
+                    <td>
+                        {% if q.answer_image %}
+                        <div class="mb-1">
+                            <a href="{{ url_for('static', filename='uploads/' + q.answer_image) }}" target="_blank">
+                                <img src="{{ url_for('static', filename='uploads/' + q.answer_image) }}" class="img-thumbnail" style="max-height: 50px;">
+                            </a>
+                        </div>
+                        {% endif %}
+                        {{ q.answer_text if q.answer_text else '-' }}
+                    </td>
+                    <td>
+                        <span class="badge bg-secondary">{{ q.employee.department.name }}</span> 
+                        <span {% if q.employee.is_deleted %}style="color: #999; opacity: 0.7;" title="Deactivated Employee"{% endif %}>
+                            {{ q.employee.full_name }}
+                        </span>
+                    </td>
                     <td>{{ q.created_at.strftime('%Y-%m-%d') }}</td>
                     <td>
                         <div class="btn-group" role="group">
@@ -166,7 +194,7 @@
                                 <h5 class="modal-title">Edit Question</h5>
                                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                             </div>
-                            <form action="{{ url_for('update_question', id=q.id) }}" method="POST">
+                            <form action="{{ url_for('update_question', id=q.id) }}" method="POST" enctype="multipart/form-data">
                                 <div class="modal-body">
                                     <div class="mb-3">
                                         <label class="form-label text-muted small">Asked by</label>
@@ -188,6 +216,13 @@
                                         <label class="form-label">Your Answer / Notes</label>
                                         <textarea class="form-control" name="answer_text"
                                             rows="3">{{ q.answer_text or '' }}</textarea>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Attach Photo to Answer (Optional)</label>
+                                        <input type="file" class="form-control" name="answer_image" accept="image/*">
+                                        {% if q.answer_image %}
+                                        <div class="mt-2 text-muted small">Current: {{ q.answer_image }}</div>
+                                        {% endif %}
                                     </div>
                                     <div class="mb-3">
                                         <label class="form-label">Status</label>
@@ -258,46 +293,4 @@
     {% endif %}
 </div>
 
-<!-- Employee Search Script -->
-<script>
-    document.addEventListener('DOMContentLoaded', function () {
-        const searchInput = document.getElementById('dashboardEmployeeSearch');
-        const employeeSelect = document.getElementById('dashboardEmployeeSelect');
-
-        if (searchInput && employeeSelect) {
-            // Store original options
-            const originalOptions = [];
-            for (let i = 0; i < employeeSelect.options.length; i++) {
-                const opt = employeeSelect.options[i];
-                originalOptions.push({
-                    value: opt.value,
-                    text: opt.text,
-                    textLower: opt.text.toLowerCase()
-                });
-            }
-
-            searchInput.addEventListener('input', function () {
-                const searchTerm = this.value.toLowerCase().trim();
-
-                // Clear current options
-                employeeSelect.innerHTML = '';
-
-                // Add matching options back
-                originalOptions.forEach(function (opt) {
-                    if (opt.value === '' || searchTerm === '' || opt.textLower.includes(searchTerm)) {
-                        const newOption = document.createElement('option');
-                        newOption.value = opt.value;
-                        newOption.text = opt.text;
-                        employeeSelect.add(newOption);
-                    }
-                });
-
-                // If only one match (plus placeholder), auto-select it
-                if (employeeSelect.options.length === 2 && searchTerm !== '') {
-                    employeeSelect.selectedIndex = 1;
-                }
-            });
-        }
-    });
-</script>
-{% endblock %}
+{% endblock %}
