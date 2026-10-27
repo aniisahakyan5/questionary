@@ -45,7 +45,7 @@
                         <td>{{ emp.full_name }}</td>
                         <td>{{ emp.department.name }}</td>
                         <td>{{ emp.position }}</td>
-                        <td>{{ emp.questions|length }}</td>
+                        <td>{{ question_counts.get(emp.id, 0) }}</td>
                         <td>
                             <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal"
                                 data-bs-target="#editEmployeeModal{{ emp.id }}">
