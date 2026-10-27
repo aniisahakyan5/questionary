@@ -1,17 +1,20 @@
 import os
 import uuid
+import smtplib
+from email.message import EmailMessage
 from datetime import datetime
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import func
+from sqlalchemy.orm import DeclarativeBase, joinedload, selectinload
+from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, BooleanField, SubmitField, EmailField
 from wtforms.validators import DataRequired, Email, EqualTo
 from itsdangerous import URLSafeTimedSerializer
-from flask_mail import Mail, Message
 
 # --- Application Setup ---
 load_dotenv() # Load environment variables from .env
@@ -41,6 +44,8 @@ class Base(DeclarativeBase):
 
 db = SQLAlchemy(model_class=Base)
 app = Flask(__name__)
+# Vercel terminates HTTPS at its proxy; trust X-Forwarded-* so external URLs (magic links) use https
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # Initialize LoginManager
 login_manager = LoginManager()
@@ -49,7 +54,7 @@ login_manager.login_view = 'login'
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-this-later")
 # Use Neon DB if available, else fallback to SQLite
 database_url = os.environ.get("DATABASE_URL", "sqlite:///project.db")
@@ -57,14 +62,29 @@ if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 app.config["SQLALCHEMY_DATABASE_URI"] = database_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+if database_url.startswith("postgresql"):
+    # Remote (Neon) DB: drop dead connections instead of erroring, keep the pool small for serverless
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_pre_ping": True,
+        "pool_recycle": 280,
+        "pool_size": 5,
+        "max_overflow": 5,
+        "connect_args": {"connect_timeout": 10},
+    }
 
 # Email Configuration
-app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
+def _env_bool(name, default):
+    return os.environ.get(name, default).strip().lower() in ('1', 'true', 'yes', 'on')
+
+app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com').strip()
 app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
-app.config['MAIL_USE_TLS'] = os.environ.get('MAIL_USE_TLS', 'True') == 'True'
-app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
-app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
-app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_USERNAME', 'noreply@questionary.app')
+app.config['MAIL_USE_TLS'] = _env_bool('MAIL_USE_TLS', 'True')
+app.config['MAIL_USE_SSL'] = _env_bool('MAIL_USE_SSL', 'True' if app.config['MAIL_PORT'] == 465 else 'False')
+app.config['MAIL_USERNAME'] = (os.environ.get('MAIL_USERNAME') or '').strip() or None
+# Gmail shows app passwords as "abcd efgh ijkl mnop"; the spaces must be removed
+app.config['MAIL_PASSWORD'] = (os.environ.get('MAIL_PASSWORD') or '').replace(' ', '').strip() or None
+app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER') or app.config['MAIL_USERNAME'] or 'noreply@questionary.app'
+app.config['MAIL_TIMEOUT'] = int(os.environ.get('MAIL_TIMEOUT', 10))
 
 # Upload Configuration
 app.config['UPLOAD_FOLDER'] = os.path.join(app.root_path, 'static', 'uploads')
@@ -75,9 +95,57 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
 
-# Initialize Serializer and Mail
+# Initialize Serializer
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
-mail = Mail(app)
+
+def send_email(to, subject, body):
+    """Send a plain-text email. Returns True on success, False otherwise.
+
+    Uses a socket timeout so a slow/unreachable SMTP server can't hang the request.
+    Without credentials configured, the email is printed to the console (dev mode).
+    """
+    cfg = app.config
+    if not (cfg['MAIL_USERNAME'] and cfg['MAIL_PASSWORD']):
+        print(f"--- EMAIL (mail not configured) ---\nTo: {to}\nSubject: {subject}\n\n{body}\n-----------------------------------", flush=True)
+        return False
+
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = cfg['MAIL_DEFAULT_SENDER']
+    msg['To'] = to
+    msg.set_content(body)
+
+    try:
+        if cfg['MAIL_USE_SSL']:
+            server = smtplib.SMTP_SSL(cfg['MAIL_SERVER'], cfg['MAIL_PORT'], timeout=cfg['MAIL_TIMEOUT'])
+        else:
+            server = smtplib.SMTP(cfg['MAIL_SERVER'], cfg['MAIL_PORT'], timeout=cfg['MAIL_TIMEOUT'])
+        with server:
+            if cfg['MAIL_USE_TLS'] and not cfg['MAIL_USE_SSL']:
+                server.starttls()
+            server.login(cfg['MAIL_USERNAME'], cfg['MAIL_PASSWORD'])
+            server.send_message(msg)
+        print(f"Email sent to {to}", flush=True)
+        return True
+    except Exception as e:
+        print(f"Error sending email to {to}: {type(e).__name__}: {e}", flush=True)
+        return False
+
+def send_login_link(email):
+    token = serializer.dumps(email, salt='login-salt')
+    link = url_for('login_callback', token=token, _external=True)
+    return send_email(email, 'Your Login Link - Questionary', f'''Hello,
+
+Click the link below to log in to Questionary:
+
+{link}
+
+This link will expire in 1 hour.
+
+If you didn't request this, please ignore this email.
+
+Best regards,
+Questionary Team''')
 
 db.init_app(app)
 
@@ -191,6 +259,22 @@ class SentimentResponse(db.Model):
     sentiment_text = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+# --- Query helpers ---
+# Templates walk q.employee.department, q.parent and q.children; load them up front so a
+# page is a handful of queries instead of several per row (each one a round trip to Neon).
+
+def question_load_options():
+    return (
+        joinedload(Question.employee).joinedload(Employee.department),
+        joinedload(Question.parent),
+        selectinload(Question.children).joinedload(Question.employee),
+    )
+
+def active_employees():
+    return (Employee.query.filter_by(is_deleted=False)
+            .options(joinedload(Employee.department))
+            .order_by(Employee.full_name).all())
+
 # --- Routes ---
 
 # --- Auth Routes ---
@@ -203,7 +287,7 @@ def login():
         return redirect(url_for('dashboard'))
 
     if request.method == 'POST':
-        email = request.form.get('email')
+        email = (request.form.get('email') or '').strip()
         password = request.form.get('password')
         
         if not email:
@@ -236,46 +320,10 @@ def login():
             db.session.commit()
             print(f"First user created as ADMIN: {email}")
 
-        # Generate Magic Link
-        token = serializer.dumps(email, salt='login-salt')
-        link = url_for('login_callback', token=token, _external=True)
-        
-        # Send Email
-        try:
-            if app.config['MAIL_USERNAME'] and app.config['MAIL_PASSWORD']:
-                msg = Message(
-                    subject='Your Login Link - Questionary',
-                    recipients=[email],
-                    body=f'''Hello,
+        if not send_login_link(email) and app.config['MAIL_USERNAME']:
+            flash('We could not send the login email right now. Please try again in a moment or contact an admin.', 'danger')
+            return redirect(url_for('login'))
 
-Click the link below to log in to Questionary:
-
-{link}
-
-This link will expire in 1 hour.
-
-If you didn't request this, please ignore this email.
-
-Best regards,
-Questionary Team'''
-                )
-                mail.send(msg)
-                print(f"Email sent to {email}")
-            else:
-                # Development mode - print to console
-                print(f"--- MAGIC LOGIN LINK ---", flush=True)
-                print(f"To: {email}", flush=True)
-                print(f"Link: {link}", flush=True)
-                print(f"------------------------", flush=True)
-        except Exception as e:
-            print(f"Error sending email: {e}")
-            # Fallback to console
-            print(f"--- MAGIC LOGIN LINK ---", flush=True)
-            print(f"To: {email}", flush=True)
-            print(f"Link: {link}", flush=True)
-            print(f"------------------------", flush=True)
-        
-        flash('Check your email for the login link!', 'info')
         return render_template('login_sent.html', email=email)
         
     return render_template('login.html')
@@ -412,12 +460,13 @@ def admin():
             db.session.add(new_user)
             db.session.commit()
             
-            # Optionally send them a link immediately?
-            # For now just say they are added
-            flash(f'User {email} added to whitelist.', 'success')
+            if send_login_link(email):
+                flash(f'User {email} added and a login link was emailed to them.', 'success')
+            else:
+                flash(f'User {email} added to whitelist, but the email could not be sent. They can request a login link from the login page.', 'warning')
             return redirect(url_for('admin'))
     
-    users = User.query.all()
+    users = User.query.order_by(User.email).all()
     return render_template('admin.html', users=users, invite_form=invite_form)
 
 @app.route('/admin/user/delete/<int:id>')
@@ -448,8 +497,8 @@ def dashboard():
         flash('You do not have permission to view the dashboard.', 'warning')
         return render_template('base.html') # Minimal view
 
-    total_questions = Question.query.count()
-    pending_questions = Question.query.filter_by(status='Pending').count()
+    total_questions = db.session.query(func.count(Question.id)).scalar()
+    pending_questions = db.session.query(func.count(Question.id)).filter(Question.status == 'Pending').scalar()
     
     # Pagination parameters
     page = request.args.get('page', 1, type=int)
@@ -457,7 +506,8 @@ def dashboard():
     status_filter = request.args.get('status')
     
     # Sort by Department Name, then by Date
-    query = db.session.query(Question).join(Employee).join(Department)
+    query = (db.session.query(Question).join(Employee).join(Department)
+             .options(joinedload(Question.employee).joinedload(Employee.department)))
     
     if status_filter:
         query = query.filter(Question.status == status_filter)
@@ -465,12 +515,19 @@ def dashboard():
     questions_pagination = query.order_by(Department.name, Question.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
     all_questions = questions_pagination.items
     
-    # Get top recurring questions (parents with children)
-    recurring_questions = [q for q in Question.query.all() if q.repetition_count > 1]
+    # Get top recurring questions: only parents that have at least one child, loaded with
+    # children/employees in bulk instead of scanning every question one query at a time
+    parent_ids = db.session.query(Question.parent_id).filter(Question.parent_id.isnot(None)).distinct()
+    candidates = (Question.query
+                  .filter(Question.id.in_(parent_ids))
+                  .options(joinedload(Question.employee),
+                           selectinload(Question.children).joinedload(Question.employee))
+                  .all())
+    recurring_questions = [q for q in candidates if q.repetition_count > 1]
     recurring_questions.sort(key=lambda x: x.repetition_count, reverse=True)
     
     # Get employees for the Add Question modal (only non-deleted)
-    employees = Employee.query.filter_by(is_deleted=False).all()
+    employees = active_employees()
     
     return render_template('dashboard.html', 
                            total_questions=total_questions,
@@ -490,9 +547,8 @@ def view_question(id):
         flash('Access Denied', 'danger')
         return redirect(url_for('index'))
     
-    question = Question.query.get_or_404(id)
-    employees = Employee.query.filter_by(is_deleted=False).all()
-    all_questions = Question.query.order_by(Question.created_at.desc()).all()
+    question = Question.query.options(*question_load_options()).get_or_404(id)
+    employees = active_employees()
     
     return render_template('questions.html', 
                            questions=[question], 
@@ -590,8 +646,9 @@ def questions():
         return redirect(url_for('questions'))
         return redirect(url_for('questions'))
         
-    all_questions = Question.query.order_by(Question.created_at.desc()).all()
-    employees = Employee.query.filter_by(is_deleted=False).all()
+    all_questions = (Question.query.options(*question_load_options())
+                     .order_by(Question.created_at.desc()).all())
+    employees = active_employees()
     return render_template('questions.html', questions=all_questions, employees=employees)
 
 @app.route('/questions/<int:id>/update', methods=['POST'])
@@ -678,7 +735,9 @@ def departments():
         return redirect(url_for('departments'))
     
     all_depts = Department.query.all()
-    return render_template('departments.html', departments=all_depts)
+    employee_counts = dict(db.session.query(Employee.department_id, func.count(Employee.id))
+                           .group_by(Employee.department_id).all())
+    return render_template('departments.html', departments=all_depts, employee_counts=employee_counts)
 
 @app.route('/departments/<int:id>/update', methods=['POST'])
 @login_required
@@ -725,9 +784,12 @@ def employees():
             flash('Employee added!', 'success')
         return redirect(url_for('employees'))
     
-    all_emps = Employee.query.filter_by(is_deleted=False).all()
-    departments = Department.query.all()
-    return render_template('employees.html', employees=all_emps, departments=departments)
+    all_emps = active_employees()
+    departments = Department.query.order_by(Department.name).all()
+    question_counts = dict(db.session.query(Question.employee_id, func.count(Question.id))
+                           .group_by(Question.employee_id).all())
+    return render_template('employees.html', employees=all_emps, departments=departments,
+                           question_counts=question_counts)
 
 @app.route('/employees/<int:id>/update', methods=['POST'])
 @login_required
@@ -792,8 +854,11 @@ def tasks():
             flash('Task added successfully!', 'success')
         return redirect(url_for('tasks'))
 
-    all_tasks = Task.query.order_by(Task.created_at.desc()).all()
-    employees = Employee.query.filter_by(is_deleted=False).all()
+    all_tasks = (Task.query
+                 .options(joinedload(Task.employee).joinedload(Employee.department),
+                          selectinload(Task.children).joinedload(Task.employee))
+                 .order_by(Task.created_at.desc()).all())
+    employees = active_employees()
     return render_template('tasks.html', tasks=all_tasks, employees=employees)
 
 @app.route('/tasks/<int:id>/delete', methods=['POST'])
