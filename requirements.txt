@@ -7,3 +7,4 @@ psycopg2-binary
 Flask-Login
 authlib
 requests
+psycopg[binary]
